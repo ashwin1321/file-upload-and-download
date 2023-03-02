@@ -11,13 +11,12 @@ app.use(cors());
 
 // app.use(express.static("uploads"));
 
-// configuring multer storage
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, "uploads/");
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
-    cb(null, file.originalname);
+    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
   },
 });
 const upload = multer({ storage: storage });
@@ -33,13 +32,15 @@ const pool = new Pool({
 
 // create files table if it doesn't exist
 pool.query(
-  "CREATE TABLE IF NOT EXISTS files (" +
-    "id SERIAL PRIMARY KEY," +
-    "name VARCHAR(255) NOT NULL," +
-    "size INTEGER NOT NULL," +
-    "mimetype VARCHAR(255) NOT NULL," +
-    "data BYTEA" +
-    ")",
+  `CREATE TABLE IF NOT EXISTS patient_data (
+    id SERIAL PRIMARY KEY,
+    patient_name VARCHAR(255) NOT NULL,
+    symptoms TEXT,
+    test TEXT,
+    diagnosis TEXT,
+    file_name VARCHAR(255),
+    mime_type VARCHAR(255),
+    data BYTEA )`,
   (err) => {
     if (err) {
       console.error(err);
@@ -51,54 +52,51 @@ pool.query(
 
 app.use(bodyParser.json());
 
-// POST route to upload file
-app.post("/upload", upload.single("file"), (req, res) => {
-  const { filename, mimetype, size } = req.file;
-  const data = fs.readFileSync(path.join("uploads/", filename));
-  const query =
-    "INSERT INTO files(name, size, mimetype, data) VALUES ($1, $2, $3, $4)";
-  const values = [filename, size, mimetype, data];
-  pool.query(query, values, (err) => {
-    if (err) {
-      console.error(err);
-      res.status(500).send("Error uploading file");
-    } else {
-      res.send("File uploaded successfully");
-    }
-  });
+app.post('/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { filename, mimetype, size } = req.file;
+    const { patient_name, symptoms, test, diagnosis } = req.body;
+
+    const data = fs.readFileSync(path.join("uploads/", filename));
+
+    const query =
+      "INSERT INTO patient_data(patient_name, symptoms, test, diagnosis, file_name, mime_type, data) VALUES ($1, $2, $3, $4, $5, $6, $7)";
+    const values = [patient_name, symptoms, test, diagnosis, filename, mimetype, data]
+
+    pool.query(query, values, (err) => {
+      if (err) {
+        console.error(err);
+        res.status(500).send("Error uploading file");
+      } else {
+        res.send("File uploaded successfully");
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// GET route to get all files
-app.get("/files", (req, res) => {
-  const query = "SELECT * FROM files";
-  pool.query(query, (err, result) => {
-    if (err) {
-      console.error(err);
-      res.status(500).send("Error retrieving files");
-    } else {
-      res.send(result.rows);
-    }
-  });
-});
-
-// GET route to download file
 app.get("/download/:id", (req, res) => {
   const fileId = req.params.id;
-  const query = "SELECT * FROM files WHERE id = $1";
+  console.log(fileId)
+  const query = "SELECT * FROM patient_data WHERE id = $1";
   const values = [fileId];
   pool.query(query, values, (err, result) => {
+
+    // console.log(result.rows)
     if (err) {
       console.error(err);
       res.status(500).send("Error downloading file");
     } else if (result.rowCount === 0) {
       res.status(404).send("File not found");
     } else {
-      const { name, mimetype, data } = result.rows[0];
+      const { file_name, mime_type, data } = result.rows[0];
 
       // write the file to the downloads folder using writefilesync
-      const filePath = path.join("uploads/", name);
+      const filePath = path.join("uploads/", file_name);
       fs.writeFileSync(filePath, data);
-      res.download(filePath, name, (err) => {
+      res.download(filePath, file_name, (err) => {
         if (err) {
           console.error(err);
         }
@@ -109,8 +107,14 @@ app.get("/download/:id", (req, res) => {
   });
 });
 
-app.get("/", (req, res) => {
-  res.json("Hello World");
+app.get('/patients', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM patient_data');
+    res.status(200).json(rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.listen(3000, () => {
